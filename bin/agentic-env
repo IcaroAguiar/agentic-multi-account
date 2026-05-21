@@ -156,10 +156,21 @@ def read_key() -> str:
     old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        first = sys.stdin.read(1)
-        if first == "\x1b" and select.select([sys.stdin], [], [], 0.02)[0]:
-            return first + sys.stdin.read(2)
-        return first
+        first = os.read(fd, 1)
+        if first == b"\x1b":
+            seq = first
+            # Arrow keys can arrive as CSI (ESC [ A) or SS3 (ESC O A).
+            # Read all immediately pending bytes so slow terminals do not
+            # leave part of the escape sequence for the next menu loop.
+            while select.select([sys.stdin], [], [], 0.12)[0]:
+                seq += os.read(fd, 1)
+                text = seq.decode("utf-8", "ignore")
+                if text in {"\x1b[A", "\x1b[B", "\x1bOA", "\x1bOB"}:
+                    return text
+                if len(seq) >= 8:
+                    return seq.decode("utf-8", "ignore")
+            return seq.decode("utf-8", "ignore")
+        return first.decode("utf-8", "ignore")
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
@@ -189,9 +200,9 @@ def choose_tty(prompt: str, choices, default=None) -> str:
             raise KeyboardInterrupt
         if key in {"\r", "\n"}:
             return choices[selected][0]
-        if key in {"\x1b[A", "k", "K"}:
+        if key in {"\x1b[A", "\x1bOA", "k", "K"}:
             selected = (selected - 1) % len(choices)
-        elif key in {"\x1b[B", "j", "J"}:
+        elif key in {"\x1b[B", "\x1bOB", "j", "J"}:
             selected = (selected + 1) % len(choices)
         elif key.isdigit():
             value = int(key)
