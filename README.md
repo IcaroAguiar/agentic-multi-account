@@ -212,11 +212,11 @@ Selective inheritance is intentionally opt-in and depends on the credential type
 | Surface | Default | How to inherit | Notes |
 | --- | --- | --- | --- |
 | GitHub CLI | isolated | set `AGENTIC_INHERIT_GH=1` in `env/inheritance.env` | Then `gh-corp` uses the same `~/.config/gh` auth as plain `gh`. |
-| GitHub Codex plugin | follows `gh` CLI | same as GitHub CLI | The GitHub plugin shells out to `gh` for many workflows. |
+| GitHub from local plugin workflows | follows process env | same as GitHub CLI | The Codex Work launcher exports `GH_CONFIG_DIR` and `PATH` so local workflows that shell out to `gh` see the selected identity. If plain `gh auth status` is invalid, inherited `gh-corp` is also invalid. |
+| Hosted Codex connectors | account controlled | connect inside the target Codex/ChatGPT account | Gmail, Drive, Teams, hosted GitHub, Hostinger and similar connectors do not inherit local files just because `CODEX_HOME` changes. |
 | Vercel CLI/env | provider tokens scrubbed | put corp-specific `VERCEL_TOKEN` etc. in `account.env` | Do not inherit by default if personal and corp projects differ. |
 | Hostinger env | provider tokens scrubbed | put corp-specific token/env in `account.env` | Hosted Codex connectors may also require login in the target Codex account. |
 | Chrome/browser profile | normal macOS profile unless separately isolated | use your normal Chrome profile or create a separate Chrome profile manually | `CODEX_HOME` does not isolate Chrome cookies. |
-| Teams/Gmail/Drive hosted connectors | connector/account controlled | connect the plugin inside the target Codex/ChatGPT account | Do not copy local files to inherit these sessions. |
 | Codex auth/session/history | isolated | do not inherit | Never copy `auth.json`, state DBs, sessions, logs or rollouts. |
 
 Example: make only the corp account inherit global GitHub CLI auth:
