@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+export AGENTIC_ENV_PROG=aenv
+exec "$(dirname "$0")/agentic-env" "$@"

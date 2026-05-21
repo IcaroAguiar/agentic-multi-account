@@ -125,9 +125,11 @@ Use the matching `*-me` aliases for your personal account.
 
 ## Interactive CLI
 
-`agentic-env` is the durable command for diagnosing and maintaining the local setup from any repo:
+`aenv` is the short interactive command. `agentic-env` is the explicit long name. Both diagnose and maintain the local setup from any repo:
 
 ```zsh
+aenv
+aenv configure
 agentic-env --help
 agentic-env
 agentic-env configure
@@ -136,13 +138,14 @@ agentic-env --json doctor corp
 agentic-env --json smoke-test corp
 ```
 
-Use `agentic-env` or `agentic-env configure` for the human guided flow. It shows numbered steps, explains the trade-off of each choice, asks before writes, and keeps destructive/auth actions behind backup-aware confirmations.
+Use `aenv` or `agentic-env configure` for the human guided flow. It auto-detects your shell, shows an environment dashboard, supports arrow-key menus in a real terminal, validates typed repo names, asks before writes, and keeps destructive/auth actions behind backup-aware confirmations.
 
 Install it on PATH:
 
 ```zsh
 mkdir -p ~/.local/bin
 ln -sf "$PWD/bin/agentic-env" ~/.local/bin/agentic-env
+ln -sf "$PWD/bin/aenv" ~/.local/bin/aenv
 ```
 
 Common operations:
@@ -300,6 +303,7 @@ bin/agentic-gh             GitHub CLI wrapper
 bin/agentic-shell          account-scoped interactive shell
 bin/agentic-doctor         prints effective paths
 bin/agentic-env            interactive setup/doctor/smoke CLI
+bin/aenv                   short alias for agentic-env
 
 lib/account-env.sh         shared env resolver
 

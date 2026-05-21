@@ -2,17 +2,56 @@
 import argparse
 import json
 import os
+import re
+import select
 import shutil
 import subprocess
 import sys
+import termios
+import time
 from datetime import datetime
 from types import SimpleNamespace
 from pathlib import Path
+import tty
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 BIN_DIR = KIT_ROOT / "bin"
 SCRIPTS_DIR = KIT_ROOT / "scripts"
+
+
+def color(text: str, code: str) -> str:
+    if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+def dim(text: str) -> str:
+    return color(text, "2")
+
+
+def bold(text: str) -> str:
+    return color(text, "1")
+
+
+def green(text: str) -> str:
+    return color(text, "32")
+
+
+def yellow(text: str) -> str:
+    return color(text, "33")
+
+
+def red(text: str) -> str:
+    return color(text, "31")
+
+
+def cyan(text: str) -> str:
+    return color(text, "36")
+
+
+def prog_name() -> str:
+    return os.environ.get("AGENTIC_ENV_PROG", Path(sys.argv[0]).name)
 
 
 def now_stamp() -> str:
@@ -33,6 +72,27 @@ def run(cmd, check=False):
         "exit_code": proc.returncode,
         "stdout": proc.stdout.strip(),
         "stderr": proc.stderr.strip(),
+    }
+
+
+def run_with_spinner(cmd):
+    if not sys.stdout.isatty():
+        return run(cmd)
+    spinner = "|/-\\"
+    proc = subprocess.Popen(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    idx = 0
+    while proc.poll() is None:
+        print(f"\r{cyan(spinner[idx % len(spinner)])} executando: {' '.join(cmd)}", end="", flush=True)
+        idx += 1
+        time.sleep(0.1)
+    stdout, stderr = proc.communicate()
+    print("\r" + " " * 80 + "\r", end="")
+    return {
+        "cmd": cmd,
+        "ok": proc.returncode == 0,
+        "exit_code": proc.returncode,
+        "stdout": stdout.strip(),
+        "stderr": stderr.strip(),
     }
 
 
@@ -59,12 +119,18 @@ def print_human(payload):
 
 def section(title: str):
     print()
-    print("=" * 72)
-    print(title)
-    print("=" * 72)
+    print(cyan("=" * 72))
+    print(bold(title))
+    print(cyan("=" * 72))
 
 
 def choose(prompt: str, choices, default=None) -> str:
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        return choose_tty(prompt, choices, default)
+    return choose_plain(prompt, choices, default)
+
+
+def choose_plain(prompt: str, choices, default=None) -> str:
     print()
     print(prompt)
     for idx, (key, label, detail) in enumerate(choices, 1):
@@ -83,6 +149,54 @@ def choose(prompt: str, choices, default=None) -> str:
             if raw == str(idx) or raw == key:
                 return key
         print("Escolha inválida. Digite o número da opção.")
+
+
+def read_key() -> str:
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        first = sys.stdin.read(1)
+        if first == "\x1b" and select.select([sys.stdin], [], [], 0.02)[0]:
+            return first + sys.stdin.read(2)
+        return first
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def choose_tty(prompt: str, choices, default=None) -> str:
+    selected = 0
+    for idx, (key, _label, _detail) in enumerate(choices):
+        if key == default:
+            selected = idx
+            break
+    while True:
+        print("\033[2J\033[H", end="")
+        print(cyan(f"{prog_name()} configure"))
+        print(dim("Use ↑/↓ ou j/k, Enter para selecionar, q para sair."))
+        print()
+        print(bold(prompt))
+        for idx, (key, label, detail) in enumerate(choices):
+            marker = ">" if idx == selected else " "
+            line = f"{marker} {idx + 1}. {label}"
+            if key == default:
+                line += "  " + dim("[default]")
+            print(color(line, "7") if idx == selected else line)
+            if detail and idx == selected:
+                print("   " + dim(detail))
+        key = read_key()
+        if key in {"q", "Q", "\x03"}:
+            raise KeyboardInterrupt
+        if key in {"\r", "\n"}:
+            return choices[selected][0]
+        if key in {"\x1b[A", "k", "K"}:
+            selected = (selected - 1) % len(choices)
+        elif key in {"\x1b[B", "j", "J"}:
+            selected = (selected + 1) % len(choices)
+        elif key.isdigit():
+            value = int(key)
+            if 1 <= value <= len(choices):
+                return choices[value - 1][0]
 
 
 def confirm(prompt: str, default: bool = False) -> bool:
@@ -104,15 +218,38 @@ def print_command(cmd: list[str]):
 
 def run_and_show(name: str, cmd: list[str], allow_fail: bool = False):
     print()
-    print(f"Step: {name}")
+    print(bold(f"Step: {name}"))
     print_command(cmd)
-    result = run(cmd)
+    result = run_with_spinner(cmd)
     output = result["stdout"] or result["stderr"]
     if output:
         print(output)
     if not result["ok"] and not allow_fail:
         print(f"Falhou com exit code {result['exit_code']}.")
     return result
+
+
+def print_table(rows):
+    if not rows:
+        return
+    left = max(len(str(row[0])) for row in rows)
+    right = max(len(str(row[1])) for row in rows)
+    border = "+" + "-" * (left + 2) + "+" + "-" * (right + 2) + "+"
+    print(cyan(border))
+    for key, value in rows:
+        print(f"| {str(key).ljust(left)} | {str(value).ljust(right)} |")
+    print(cyan(border))
+
+
+def input_repo(prompt: str):
+    pattern = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    while True:
+        value = input(prompt).strip()
+        if not value:
+            return None
+        if pattern.match(value):
+            return value
+        print(red("Formato invalido. Use org/repo, por exemplo IcaroAguiar/agentic-multi-account."))
 
 
 def read_kv_file(path: Path):
@@ -265,6 +402,82 @@ def shell_rc(shell: str):
     return None
 
 
+def github_status_label(detail: str, ok: bool) -> str:
+    if ok:
+        return green("ok")
+    if "token in default is invalid" in detail:
+        return red("token global invalido")
+    if "not logged into any GitHub hosts" in detail:
+        return yellow("sem login")
+    return red("falha")
+
+
+def collect_snapshot(account: str):
+    root = account_root(account)
+    inheritance = read_kv_file(root / "env" / "inheritance.env")
+    gh_mode = "inherited-global" if inheritance.get("AGENTIC_INHERIT_GH") == "1" else "isolated"
+    gh = run([str(BIN_DIR / "agentic-gh"), account, "auth", "status"])
+    icon = Path("/Applications/Codex Work.app")
+    icon_exec = ""
+    if icon.exists():
+        icon_exec_result = run(["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleExecutable", str(icon / "Contents" / "Info.plist")])
+        icon_exec = icon_exec_result["stdout"]
+    shell = detect_shell()
+    return {
+        "account": account,
+        "shell": shell,
+        "shell_rc": str(shell_rc(shell)) if shell_rc(shell) else "manual",
+        "root": root,
+        "codex_home": root / "codex",
+        "codex_auth": (root / "codex" / "auth.json").exists(),
+        "claude_home": root / "claude",
+        "opencode_home": root / "opencode",
+        "gh_mode": gh_mode,
+        "gh_ok": gh["ok"],
+        "gh_detail": gh["stdout"] or gh["stderr"],
+        "icon_ok": icon.exists() and icon_exec == "codex-work-launcher",
+        "icon_exec": icon_exec or "missing",
+    }
+
+
+def print_dashboard(snapshot):
+    print()
+    print(bold(f"{snapshot['account']} environment"))
+    print_table(
+        [
+            ("Shell", f"{snapshot['shell']}  {snapshot['shell_rc']}"),
+            ("Codex home", snapshot["codex_home"]),
+            ("Codex auth", "presente" if snapshot["codex_auth"] else "ausente"),
+            ("Claude", snapshot["claude_home"]),
+            ("OpenCode", snapshot["opencode_home"]),
+            ("GitHub", f"{snapshot['gh_mode']}  {'ok' if snapshot['gh_ok'] else 'needs attention'}"),
+            ("Codex Work", f"{'ok' if snapshot['icon_ok'] else 'requer validacao'}  {snapshot['icon_exec']}"),
+        ]
+    )
+
+
+def dashboard_text(snapshot):
+    return "\n".join(
+        [
+            f"{snapshot['account']} environment",
+            f"Shell      {snapshot['shell']}  {snapshot['shell_rc']}",
+            f"Codex      {snapshot['codex_home']}  auth={'yes' if snapshot['codex_auth'] else 'no'}",
+            f"GitHub     {snapshot['gh_mode']}  {'ok' if snapshot['gh_ok'] else 'needs attention'}",
+            f"Launcher   {'ok' if snapshot['icon_ok'] else 'needs validation'}",
+            "",
+            "Escolha a proxima acao:",
+        ]
+    )
+
+
+def recommended_action(snapshot):
+    if not snapshot["gh_ok"]:
+        return "github"
+    if not snapshot["icon_ok"] and snapshot["account"] == "corp":
+        return "icon"
+    return "smoke"
+
+
 def command_setup(args):
     shell = detect_shell() if args.shell == "auto" else args.shell
     snippet = shell_snippet(shell)
@@ -404,49 +617,49 @@ def command_configure(args):
         return 2
 
     try:
-        section("agentic-env configure")
-        print("Fluxo guiado para configurar e validar ambientes Codex pessoais/work.")
-        print("Por padrão, ações destrutivas não acontecem: auth é movido para backup e mudanças pedem confirmação.")
+        section(f"{prog_name()} configure")
+        print("Configura ambientes isolados para Codex, Claude Code, OpenCode e GitHub.")
+        print(dim("Auto-detecta shell, mostra estado atual e pede confirmacao antes de writes."))
 
         account = choose(
-            "Qual ambiente você quer configurar agora?",
+            "Escolha o ambiente",
             [
-                ("corp", "Work/corp", "Isola Codex Work, GitHub Work, Claude Code, OpenCode, caches e workspaces."),
-                ("personal", "Personal", "Mantém o ambiente pessoal separado e útil para comparação/smoke."),
+                ("corp", "Work/corp", "Conta de trabalho com auth, state, caches e workspaces separados."),
+                ("personal", "Personal", "Conta pessoal, util para comparar e manter isolamento explicito."),
             ],
             default="corp",
         )
 
         while True:
-            section(f"Ambiente selecionado: {account}")
+            snapshot = collect_snapshot(account)
+            if not sys.stdin.isatty():
+                section(f"Estado atual: {account}")
+                print_dashboard(snapshot)
+            prompt = dashboard_text(snapshot) if sys.stdin.isatty() else "Escolha a proxima acao"
             action = choose(
-                "O que você quer fazer?",
+                prompt,
                 [
-                    ("diagnose", "Diagnosticar estado atual", "Mostra paths, CODEX_HOME, XDG, GitHub mode, auth e próximos passos."),
-                    ("setup", "Configurar shell e estrutura", "Detecta zsh/bash/fish e cria estrutura de contas com confirmação."),
-                    ("github", "Escolher GitHub: isolado ou herdado", "Controla se gh usa ~/.config/gh ou ~/AgenticAccounts/<conta>/github."),
-                    ("migrate", "Migrar harness/plugins aprovados", "Copia AGENTS, hooks, plugins e configs permitidas sem auth/sessões."),
-                    ("icon", "Instalar/validar ícone Codex Work", "Usa launcher seguro; não modifica /Applications/Codex.app."),
-                    ("auth", "Resetar auth com backup", "Move auth Codex/GitHub para backup antes de novo login."),
-                    ("smoke", "Rodar smoke tests", "Valida ambiente, GitHub e opcionalmente Codex doctor."),
-                    ("switch", "Mostrar exports para este shell", "Imprime comandos para ativar o ambiente no shell atual."),
-                    ("done", "Concluir", "Sai do wizard."),
+                    ("github", "Corrigir GitHub", "Escolher isolado/herdado e validar gh auth."),
+                    ("shell", "Aplicar shell setup", "Detecta shell atual e instala PATH/bootstrap com backup."),
+                    ("icon", "Instalar Codex Work", "Launcher com icone proprio; nao altera Codex.app original."),
+                    ("share", "Migrar setup aprovado", "Sincroniza harness/plugins sem auth, sessoes ou historico."),
+                    ("smoke", "Rodar smoke test", "Valida paths, GitHub e opcionalmente codex doctor."),
+                    ("advanced", "Avancado", "Reset auth, rollback, exports e diagnostico detalhado."),
+                    ("done", "Concluir", "Sair."),
                 ],
-                default="diagnose",
+                default=recommended_action(snapshot),
             )
 
             if action == "done":
                 print("Concluído.")
                 return 0
 
-            if action == "diagnose":
-                run_and_show("status", [str(Path.home() / ".local" / "bin" / "agentic-env"), "--json", "status", account], allow_fail=True)
-                run_and_show("doctor", [str(Path.home() / ".local" / "bin" / "agentic-env"), "--json", "doctor", account], allow_fail=True)
-                continue
-
-            if action == "setup":
+            if action == "shell":
                 shell = detect_shell()
-                print(f"Shell detectado: {shell}")
+                section("Shell setup")
+                print(f"Detectado: {bold(shell)}")
+                print(f"Arquivo alvo: {shell_rc(shell) or 'manual'}")
+                print()
                 print(shell_snippet(shell))
                 if confirm("Aplicar bootstrap e integração no arquivo rc do shell?", default=False):
                     setup_args = SimpleNamespace(json=False, shell=shell if shell in {"zsh", "bash", "fish", "sh"} else "sh", yes=True)
@@ -456,22 +669,23 @@ def command_configure(args):
                 continue
 
             if action == "github":
+                section("GitHub auth")
+                print("Escolha por conta. Nao copiamos tokens e nao editamos ~/.config/gh sem voce pedir.")
                 mode = choose(
-                    "Como este ambiente deve usar GitHub?",
+                    "Modo GitHub",
                     [
-                        ("isolated", "Isolado", "Recomendado quando Work usa identidade GitHub diferente. Login via gh-corp."),
-                        ("inherit", "Herdar global", "Usa ~/.config/gh. Conveniente, mas compartilha a identidade do gh global."),
+                        ("isolated", "Isolado", f"Usa ~/AgenticAccounts/{account}/github. Recomendado para Work com usuario proprio."),
+                        ("inherit", "Herdar global", "Usa ~/.config/gh. Conveniente, mas compartilha identidade do gh global."),
                     ],
                     default="isolated" if account == "corp" else "inherit",
                 )
                 print()
-                print("Efeito:")
                 if mode == "isolated":
-                    print(f"- GH_CONFIG_DIR será ~/AgenticAccounts/{account}/github.")
-                    print("- Próximo login: gh-corp auth login -h github.com")
+                    print(f"Vai gravar AGENTIC_INHERIT_GH=0 para {account}.")
+                    print("Proximo passo manual: gh-corp auth login -h github.com")
                 else:
-                    print("- GH_CONFIG_DIR será ~/.config/gh.")
-                    print("- Se o token global estiver inválido, rode: gh auth login -h github.com")
+                    print(f"Vai gravar AGENTIC_INHERIT_GH=1 para {account}.")
+                    print("Se o token global estiver invalido: gh auth login -h github.com")
                 if confirm("Aplicar esta política de GitHub agora?", default=False):
                     link_args = SimpleNamespace(json=False, account=account, mode=mode, yes=True)
                     command_link_github(link_args)
@@ -480,7 +694,8 @@ def command_configure(args):
                     print("Dry-run concluído. Nenhum arquivo alterado.")
                 continue
 
-            if action == "migrate":
+            if action == "share":
+                section("Migrar setup aprovado")
                 print("Migração permitida: AGENTS, hooks, agents, plugins e configs aprovadas.")
                 print("Migração bloqueada: auth.json, sessões, threads, logs, state DBs, caches sensíveis e tokens.")
                 harness = confirm("Migrar harness/config aprovado?", default=True)
@@ -493,6 +708,7 @@ def command_configure(args):
                 continue
 
             if action == "icon":
+                section("Codex Work launcher")
                 print("Estratégia segura: /Applications/Codex Work.app é launcher com ícone próprio.")
                 print("Estratégia evitada: modificar o bundle Electron original ou uma cópia assinada.")
                 if confirm("Instalar/atualizar o launcher Codex Work.app?", default=False):
@@ -503,37 +719,52 @@ def command_configure(args):
                     command_install_icon(icon_args)
                 continue
 
-            if action == "auth":
-                surface = choose(
-                    "Qual auth mover para backup?",
-                    [
-                        ("codex", "Codex auth", "Move auth.json da conta selecionada para backup."),
-                        ("github", "GitHub auth isolado", "Move diretório github isolado da conta para backup."),
-                        ("all", "Codex + GitHub", "Move ambos para backup."),
-                    ],
-                    default="codex",
-                )
-                print("Nenhum token será impresso. O reset move arquivos para backup; não apaga direto.")
-                if confirm("Executar reset-auth com backup agora?", default=False):
-                    reset_args = SimpleNamespace(json=False, account=account, surface=surface, yes=True)
-                    command_reset_auth(reset_args)
-                else:
-                    reset_args = SimpleNamespace(json=False, account=account, surface=surface, yes=False)
-                    command_reset_auth(reset_args)
-                continue
-
             if action == "smoke":
-                private_repo = input("Repo privado esperado para validar acesso (opcional, formato org/repo): ").strip() or None
+                section("Smoke test")
+                private_repo = input_repo("Repo privado esperado para validar acesso (opcional, formato org/repo): ")
                 codex_doctor = confirm("Incluir codex doctor --summary?", default=False)
                 smoke_args = SimpleNamespace(json=False, account=account, private_repo=private_repo, codex_doctor=codex_doctor)
                 command_smoke_test(smoke_args)
                 continue
 
-            if action == "switch":
-                switch_args = SimpleNamespace(json=False, account=account)
-                command_switch(switch_args)
-                print()
-                print("Para aplicar no shell atual, copie/cole os exports acima.")
+            if action == "advanced":
+                advanced = choose(
+                    "Avancado",
+                    [
+                        ("diagnose", "Diagnostico detalhado", "Roda status e doctor em JSON."),
+                        ("auth", "Reset auth com backup", "Move auth Codex/GitHub para backup."),
+                        ("switch", "Mostrar exports", "Imprime variaveis para ativar a conta no shell atual."),
+                        ("rollback", "Rollback icone", "Restaura backup anterior de Codex Work.app."),
+                        ("back", "Voltar", "Retorna ao menu principal."),
+                    ],
+                    default="diagnose",
+                )
+                if advanced == "back":
+                    continue
+                if advanced == "diagnose":
+                    run_and_show("status", [str(Path.home() / ".local" / "bin" / "agentic-env"), "--json", "status", account], allow_fail=True)
+                    run_and_show("doctor", [str(Path.home() / ".local" / "bin" / "agentic-env"), "--json", "doctor", account], allow_fail=True)
+                elif advanced == "auth":
+                    surface = choose(
+                        "Qual auth mover para backup?",
+                        [
+                            ("codex", "Codex auth", "Move auth.json da conta selecionada para backup."),
+                            ("github", "GitHub auth isolado", "Move diretorio github isolado da conta para backup."),
+                            ("all", "Codex + GitHub", "Move ambos para backup."),
+                        ],
+                        default="codex",
+                    )
+                    print("Nenhum token sera impresso. O reset move arquivos para backup; nao apaga direto.")
+                    reset_args = SimpleNamespace(json=False, account=account, surface=surface, yes=confirm("Executar reset-auth com backup agora?", default=False))
+                    command_reset_auth(reset_args)
+                elif advanced == "switch":
+                    switch_args = SimpleNamespace(json=False, account=account)
+                    command_switch(switch_args)
+                    print()
+                    print("Para aplicar no shell atual, copie/cole os exports acima.")
+                elif advanced == "rollback":
+                    rollback_args = SimpleNamespace(json=False, target="icon", yes=confirm("Restaurar ultimo backup de Codex Work.app?", default=False))
+                    command_rollback(rollback_args)
                 continue
 
     except KeyboardInterrupt:
@@ -543,8 +774,8 @@ def command_configure(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="agentic-env", description="Diagnostica e mantém ambientes isolados Codex pessoal/work.")
-    parser.add_argument("--json", action="store_true", help="emite JSON estável")
+    parser = argparse.ArgumentParser(prog=os.environ.get("AGENTIC_ENV_PROG", Path(sys.argv[0]).name), description="Diagnostica e mantém ambientes isolados Codex pessoal/work.")
+    parser.add_argument("-j", "--json", action="store_true", help="emite JSON estável")
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("status", help="mostra paths e modo de isolamento")
@@ -553,13 +784,13 @@ def build_parser():
 
     p = sub.add_parser("doctor", help="diagnóstico de conta, Codex e GitHub")
     p.add_argument("account", choices=["personal", "corp"])
-    p.add_argument("--private-repo", help="repo privado esperado, ex: org/repo")
-    p.add_argument("--codex", action="store_true", help="também roda codex doctor")
+    p.add_argument("-r", "--private-repo", help="repo privado esperado, ex: org/repo")
+    p.add_argument("-c", "--codex", action="store_true", help="também roda codex doctor")
     p.set_defaults(func=command_doctor)
 
     p = sub.add_parser("setup", help="bootstrap e snippet por shell")
-    p.add_argument("--shell", choices=["auto", "zsh", "bash", "fish", "sh"], default="auto")
-    p.add_argument("--yes", action="store_true", help="aplica bootstrap e integração no rc do shell")
+    p.add_argument("-s", "--shell", choices=["auto", "zsh", "bash", "fish", "sh"], default="auto")
+    p.add_argument("-y", "--yes", action="store_true", help="aplica bootstrap e integração no rc do shell")
     p.set_defaults(func=command_setup)
 
     p = sub.add_parser("switch", help="imprime exports para ativar uma conta no shell atual")
@@ -568,40 +799,43 @@ def build_parser():
 
     p = sub.add_parser("link-github", help="define GitHub isolado ou herdado por conta")
     p.add_argument("account", choices=["personal", "corp"])
-    p.add_argument("--mode", choices=["isolated", "inherit"], required=True)
-    p.add_argument("--yes", action="store_true", help="grava env/inheritance.env com backup")
+    p.add_argument("-m", "--mode", choices=["isolated", "inherit"], required=True)
+    p.add_argument("-y", "--yes", action="store_true", help="grava env/inheritance.env com backup")
     p.set_defaults(func=command_link_github)
 
     p = sub.add_parser("install-icon", help="instala Codex Work.app como launcher seguro")
-    p.add_argument("--yes", action="store_true")
+    p.add_argument("-y", "--yes", action="store_true")
     p.set_defaults(func=command_install_icon)
 
     p = sub.add_parser("migrate", help="migra harness/plugins aprovados para uma conta")
     p.add_argument("account", choices=["personal", "corp"])
-    p.add_argument("--from", dest="source", default=str(Path.home() / ".codex"))
-    p.add_argument("--harness", action="store_true")
-    p.add_argument("--plugins", action="store_true")
-    p.add_argument("--yes", action="store_true")
+    p.add_argument("-f", "--from", dest="source", default=str(Path.home() / ".codex"))
+    p.add_argument("-H", "--harness", action="store_true")
+    p.add_argument("-P", "--plugins", action="store_true")
+    p.add_argument("-y", "--yes", action="store_true")
     p.set_defaults(func=command_migrate)
 
     p = sub.add_parser("reset-auth", help="move auth para backup; não apaga sem backup")
     p.add_argument("account", choices=["personal", "corp"])
-    p.add_argument("--surface", choices=["codex", "github", "all"], required=True)
-    p.add_argument("--yes", action="store_true")
+    p.add_argument("-S", "--surface", choices=["codex", "github", "all"], required=True)
+    p.add_argument("-y", "--yes", action="store_true")
     p.set_defaults(func=command_reset_auth)
 
     p = sub.add_parser("rollback", help="restaura backup do Codex Work.app")
     p.add_argument("target", choices=["icon"])
-    p.add_argument("--yes", action="store_true")
+    p.add_argument("-y", "--yes", action="store_true")
     p.set_defaults(func=command_rollback)
 
     p = sub.add_parser("smoke-test", help="executa smoke tests de isolamento e GitHub")
     p.add_argument("account", choices=["personal", "corp"])
-    p.add_argument("--private-repo")
-    p.add_argument("--codex-doctor", action="store_true")
+    p.add_argument("-r", "--private-repo")
+    p.add_argument("-c", "--codex-doctor", action="store_true")
     p.set_defaults(func=command_smoke_test)
 
     p = sub.add_parser("configure", help="fluxo interativo guiado com escolhas e validações")
+    p.set_defaults(func=command_configure)
+
+    p = sub.add_parser("config", help="alias de configure")
     p.set_defaults(func=command_configure)
 
     p = sub.add_parser("wizard", help="alias legado de configure")
@@ -616,6 +850,13 @@ def main():
         args.func = command_configure
     try:
         return args.func(args)
+    except KeyboardInterrupt:
+        if args.json:
+            print(json.dumps({"ok": False, "command": getattr(args, "command", None), "error": {"type": "KeyboardInterrupt", "message": "cancelado pelo usuario"}}, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print()
+            print(yellow("Operacao cancelada. Nenhuma acao pendente foi aplicada."))
+        return 130
     except Exception as exc:
         payload = {"ok": False, "command": getattr(args, "command", None), "error": {"type": exc.__class__.__name__, "message": str(exc)}}
         if args.json:
