@@ -196,7 +196,7 @@ OPENCODE_MODEL=
 Use `inheritance.env` for non-secret decisions about what a wrapped account may reuse from the normal macOS user:
 
 ```zsh
-# 0 = isolated gh auth under ~/AgenticAccounts/<account>/github
+# 0 = isolated gh auth under ~/AgenticAccounts/<account>/codex/github
 # 1 = inherit the normal global gh auth from ~/.config/gh
 AGENTIC_INHERIT_GH=0
 ```
@@ -211,7 +211,7 @@ Selective inheritance is intentionally opt-in and depends on the credential type
 
 | Surface | Default | How to inherit | Notes |
 | --- | --- | --- | --- |
-| GitHub CLI | isolated | set `AGENTIC_INHERIT_GH=1` in `env/inheritance.env` | Then `gh-corp` uses the same `~/.config/gh` auth as plain `gh`. |
+| GitHub CLI | isolated | set `AGENTIC_INHERIT_GH=1` in `env/inheritance.env` | Isolated mode stores gh config under `CODEX_HOME/github`, which works better inside Codex Work's sandbox. Inherit mode points at `~/.config/gh` and is mainly for normal terminal use. |
 | GitHub from local plugin workflows | follows process env | same as GitHub CLI | The Codex Work launcher exports `GH_CONFIG_DIR` and `PATH` so local workflows that shell out to `gh` see the selected identity. If plain `gh auth status` is invalid, inherited `gh-corp` is also invalid. |
 | Hosted Codex connectors | account controlled | connect inside the target Codex/ChatGPT account | Gmail, Drive, Teams, hosted GitHub, Hostinger and similar connectors do not inherit local files just because `CODEX_HOME` changes. |
 | Vercel CLI/env | provider tokens scrubbed | put corp-specific `VERCEL_TOKEN` etc. in `account.env` | Do not inherit by default if personal and corp projects differ. |
@@ -235,10 +235,12 @@ If global `gh auth status` reports an invalid token, inherited `gh-corp auth sta
 gh auth login -h github.com
 ```
 
-If you want corp GitHub to be separate instead, keep `AGENTIC_INHERIT_GH=0` and run:
+If you want corp GitHub to work reliably inside Codex Work, prefer isolated mode and run:
 
 ```zsh
-gh-corp auth login -h github.com
+aenv link-github corp --mode isolated --yes
+GH_CONFIG_DIR="$HOME/AgenticAccounts/corp/codex/github" gh auth login -h github.com --web
+gh-corp auth status
 ```
 
 ## Sync Codex Harness And Plugins

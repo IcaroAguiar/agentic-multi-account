@@ -311,7 +311,7 @@ def command_status(args):
         "account_root": root,
         "codex_home": root / "codex",
         "codex_auth": root / "codex" / "auth.json",
-        "github_config": Path(inheritance.get("AGENTIC_GH_CONFIG_DIR") or (str(Path.home() / ".config" / "gh") if inheritance.get("AGENTIC_INHERIT_GH") == "1" else str(root / "github"))),
+        "github_config": Path(inheritance.get("AGENTIC_GH_CONFIG_DIR") or (str(Path.home() / ".config" / "gh") if inheritance.get("AGENTIC_INHERIT_GH") == "1" else str(root / "codex" / "github"))),
         "xdg_config": root / "xdg" / "config",
         "plugins": root / "codex" / "plugins",
         "mcp": root / "mcp",
@@ -364,7 +364,7 @@ def github_next_steps(checks):
     if "token in default is invalid" in detail:
         return ["O gh herdado está chegando ao ambiente, mas o token global está inválido: rode `gh auth login -h github.com` ou troque para modo isolado."]
     if "not logged into any GitHub hosts" in detail:
-        return ["O gh isolado não está autenticado: rode `agentic-env link-github corp --mode isolated --yes` e depois `gh-corp auth login -h github.com`."]
+        return ["O gh isolado não está autenticado: rode `agentic-env link-github corp --mode isolated --yes` e depois `GH_CONFIG_DIR=\"$HOME/AgenticAccounts/corp/codex/github\" gh auth login -h github.com --web`."]
     return ["Reexecute `agentic-env --json doctor corp` após corrigir a autenticação do GitHub."]
 
 
@@ -382,7 +382,7 @@ def command_link_github(args):
         "result": result,
         "next_steps": [
             "`agentic-env --json doctor %s`" % args.account,
-            "`gh auth login -h github.com` se estiver herdando token global inválido" if args.mode == "inherit" else "`gh-corp auth login -h github.com` para login isolado",
+            "`gh auth login -h github.com` se estiver herdando token global inválido" if args.mode == "inherit" else f"`GH_CONFIG_DIR=\"$HOME/AgenticAccounts/{args.account}/codex/github\" gh auth login -h github.com --web` para login isolado compatível com Codex Work",
         ],
     }
     return emit(args, payload)
@@ -578,6 +578,7 @@ def command_reset_auth(args):
     if args.surface in {"codex", "all"}:
         targets.append(root / "codex" / "auth.json")
     if args.surface in {"github", "all"}:
+        targets.append(root / "codex" / "github")
         targets.append(root / "github")
     actions = []
     for target in targets:
@@ -685,7 +686,7 @@ def command_configure(args):
                 mode = choose(
                     "Modo GitHub",
                     [
-                        ("isolated", "Isolado", f"Usa ~/AgenticAccounts/{account}/github. Recomendado para Work com usuario proprio."),
+                        ("isolated", "Isolado", f"Usa ~/AgenticAccounts/{account}/codex/github. Recomendado para Codex Work e sandbox."),
                         ("inherit", "Herdar global", "Usa ~/.config/gh. Conveniente, mas compartilha identidade do gh global."),
                     ],
                     default="isolated" if account == "corp" else "inherit",
@@ -760,7 +761,7 @@ def command_configure(args):
                         "Qual auth mover para backup?",
                         [
                             ("codex", "Codex auth", "Move auth.json da conta selecionada para backup."),
-                            ("github", "GitHub auth isolado", "Move diretorio github isolado da conta para backup."),
+                            ("github", "GitHub auth isolado", "Move diretorios github isolados da conta para backup."),
                             ("all", "Codex + GitHub", "Move ambos para backup."),
                         ],
                         default="codex",

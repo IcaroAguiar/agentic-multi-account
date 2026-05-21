@@ -106,7 +106,7 @@ static void read_inheritance(const char *account_root, const char *home, char *g
     snprintf(gh_config, gh_config_size, "%s/.config/gh", home);
     snprintf(gh_mode, gh_mode_size, "%s", "inherited-global");
   } else {
-    snprintf(gh_config, gh_config_size, "%s/github", account_root);
+    snprintf(gh_config, gh_config_size, "%s/codex/github", account_root);
     snprintf(gh_mode, gh_mode_size, "%s", "isolated");
   }
 }

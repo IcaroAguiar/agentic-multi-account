@@ -43,7 +43,7 @@ agentic_export_env() {
     export GH_CONFIG_DIR="$HOME/.config/gh"
     export AGENTIC_GH_AUTH_MODE="inherited-global"
   else
-    export GH_CONFIG_DIR="$AGENTIC_ACCOUNT_ROOT/github"
+    export GH_CONFIG_DIR="$CODEX_HOME/github"
     export AGENTIC_GH_AUTH_MODE="isolated"
   fi
 

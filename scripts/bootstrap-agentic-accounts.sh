@@ -37,7 +37,7 @@ EOF
 # Default is strict local isolation. Enable only what this account may reuse.
 #
 # GitHub CLI:
-#   0 = isolated GH_CONFIG_DIR under this account
+#   0 = isolated GH_CONFIG_DIR under this account's CODEX_HOME
 #   1 = use the normal global gh auth at ~/.config/gh
 AGENTIC_INHERIT_GH=0
 #
