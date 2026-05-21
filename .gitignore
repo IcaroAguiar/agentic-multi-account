@@ -7,6 +7,7 @@
 
 # Local verification output
 .verify-agentic-accounts/
+assets/icons/
 
 # Never commit account state or copied runtime homes
 AgenticAccounts/
@@ -15,4 +16,3 @@ sessions/
 logs/
 state/
 cache/
-
