@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -54,6 +55,64 @@ def print_human(payload):
             print(f"  {detail}")
     for step in payload.get("next_steps", []):
         print(f"- {step}")
+
+
+def section(title: str):
+    print()
+    print("=" * 72)
+    print(title)
+    print("=" * 72)
+
+
+def choose(prompt: str, choices, default=None) -> str:
+    print()
+    print(prompt)
+    for idx, (key, label, detail) in enumerate(choices, 1):
+        suffix = " [default]" if default == key else ""
+        print(f"  {idx}. {label}{suffix}")
+        if detail:
+            print(f"     {detail}")
+    print("  q. sair")
+    while True:
+        raw = input("> ").strip()
+        if raw.lower() in {"q", "quit", "exit"}:
+            raise KeyboardInterrupt
+        if raw == "" and default:
+            return default
+        for idx, (key, _label, _detail) in enumerate(choices, 1):
+            if raw == str(idx) or raw == key:
+                return key
+        print("Escolha inválida. Digite o número da opção.")
+
+
+def confirm(prompt: str, default: bool = False) -> bool:
+    suffix = "S/n" if default else "s/N"
+    while True:
+        raw = input(f"{prompt} [{suffix}] ").strip().lower()
+        if raw == "":
+            return default
+        if raw in {"s", "sim", "y", "yes"}:
+            return True
+        if raw in {"n", "nao", "não", "no"}:
+            return False
+        print("Responda com s ou n.")
+
+
+def print_command(cmd: list[str]):
+    print("$ " + " ".join(cmd))
+
+
+def run_and_show(name: str, cmd: list[str], allow_fail: bool = False):
+    print()
+    print(f"Step: {name}")
+    print_command(cmd)
+    result = run(cmd)
+    output = result["stdout"] or result["stderr"]
+    if output:
+        print(output)
+    if not result["ok"] and not allow_fail:
+        print(f"Falhou com exit code {result['exit_code']}.")
+    return result
 
 
 def read_kv_file(path: Path):
@@ -331,6 +390,158 @@ def command_smoke_test(args):
     return command_doctor(args)
 
 
+def command_wizard(args):
+    if args.json:
+        payload = {
+            "ok": False,
+            "command": "wizard",
+            "error": {
+                "type": "InteractiveOnly",
+                "message": "wizard é interativo. Use status/doctor/smoke-test com --json para automação.",
+            },
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 2
+
+    try:
+        section("agentic-env wizard")
+        print("Fluxo guiado para configurar e validar ambientes Codex pessoais/work.")
+        print("Por padrão, ações destrutivas não acontecem: auth é movido para backup e mudanças pedem confirmação.")
+
+        account = choose(
+            "Qual ambiente você quer configurar agora?",
+            [
+                ("corp", "Work/corp", "Isola Codex Work, GitHub Work, Claude Code, OpenCode, caches e workspaces."),
+                ("personal", "Personal", "Mantém o ambiente pessoal separado e útil para comparação/smoke."),
+            ],
+            default="corp",
+        )
+
+        while True:
+            section(f"Ambiente selecionado: {account}")
+            action = choose(
+                "O que você quer fazer?",
+                [
+                    ("diagnose", "Diagnosticar estado atual", "Mostra paths, CODEX_HOME, XDG, GitHub mode, auth e próximos passos."),
+                    ("setup", "Configurar shell e estrutura", "Detecta zsh/bash/fish e cria estrutura de contas com confirmação."),
+                    ("github", "Escolher GitHub: isolado ou herdado", "Controla se gh usa ~/.config/gh ou ~/AgenticAccounts/<conta>/github."),
+                    ("migrate", "Migrar harness/plugins aprovados", "Copia AGENTS, hooks, plugins e configs permitidas sem auth/sessões."),
+                    ("icon", "Instalar/validar ícone Codex Work", "Usa launcher seguro; não modifica /Applications/Codex.app."),
+                    ("auth", "Resetar auth com backup", "Move auth Codex/GitHub para backup antes de novo login."),
+                    ("smoke", "Rodar smoke tests", "Valida ambiente, GitHub e opcionalmente Codex doctor."),
+                    ("switch", "Mostrar exports para este shell", "Imprime comandos para ativar o ambiente no shell atual."),
+                    ("done", "Concluir", "Sai do wizard."),
+                ],
+                default="diagnose",
+            )
+
+            if action == "done":
+                print("Concluído.")
+                return 0
+
+            if action == "diagnose":
+                run_and_show("status", [str(Path.home() / ".local" / "bin" / "agentic-env"), "--json", "status", account], allow_fail=True)
+                run_and_show("doctor", [str(Path.home() / ".local" / "bin" / "agentic-env"), "--json", "doctor", account], allow_fail=True)
+                continue
+
+            if action == "setup":
+                shell = detect_shell()
+                print(f"Shell detectado: {shell}")
+                print(shell_snippet(shell))
+                if confirm("Aplicar bootstrap e integração no arquivo rc do shell?", default=False):
+                    setup_args = SimpleNamespace(json=False, shell=shell if shell in {"zsh", "bash", "fish", "sh"} else "sh", yes=True)
+                    command_setup(setup_args)
+                else:
+                    print("Dry-run concluído. Nenhum arquivo alterado.")
+                continue
+
+            if action == "github":
+                mode = choose(
+                    "Como este ambiente deve usar GitHub?",
+                    [
+                        ("isolated", "Isolado", "Recomendado quando Work usa identidade GitHub diferente. Login via gh-corp."),
+                        ("inherit", "Herdar global", "Usa ~/.config/gh. Conveniente, mas compartilha a identidade do gh global."),
+                    ],
+                    default="isolated" if account == "corp" else "inherit",
+                )
+                print()
+                print("Efeito:")
+                if mode == "isolated":
+                    print(f"- GH_CONFIG_DIR será ~/AgenticAccounts/{account}/github.")
+                    print("- Próximo login: gh-corp auth login -h github.com")
+                else:
+                    print("- GH_CONFIG_DIR será ~/.config/gh.")
+                    print("- Se o token global estiver inválido, rode: gh auth login -h github.com")
+                if confirm("Aplicar esta política de GitHub agora?", default=False):
+                    link_args = SimpleNamespace(json=False, account=account, mode=mode, yes=True)
+                    command_link_github(link_args)
+                    run_and_show("github smoke", [str(BIN_DIR / "agentic-gh"), account, "auth", "status"], allow_fail=True)
+                else:
+                    print("Dry-run concluído. Nenhum arquivo alterado.")
+                continue
+
+            if action == "migrate":
+                print("Migração permitida: AGENTS, hooks, agents, plugins e configs aprovadas.")
+                print("Migração bloqueada: auth.json, sessões, threads, logs, state DBs, caches sensíveis e tokens.")
+                harness = confirm("Migrar harness/config aprovado?", default=True)
+                plugins = confirm("Migrar plugins aprovados?", default=True)
+                if confirm("Executar migração agora?", default=False):
+                    migrate_args = SimpleNamespace(json=False, account=account, source=str(Path.home() / ".codex"), harness=harness, plugins=plugins, yes=True)
+                    command_migrate(migrate_args)
+                else:
+                    print("Dry-run concluído. Nenhum arquivo alterado.")
+                continue
+
+            if action == "icon":
+                print("Estratégia segura: /Applications/Codex Work.app é launcher com ícone próprio.")
+                print("Estratégia evitada: modificar o bundle Electron original ou uma cópia assinada.")
+                if confirm("Instalar/atualizar o launcher Codex Work.app?", default=False):
+                    icon_args = SimpleNamespace(json=False, yes=True)
+                    command_install_icon(icon_args)
+                else:
+                    icon_args = SimpleNamespace(json=False, yes=False)
+                    command_install_icon(icon_args)
+                continue
+
+            if action == "auth":
+                surface = choose(
+                    "Qual auth mover para backup?",
+                    [
+                        ("codex", "Codex auth", "Move auth.json da conta selecionada para backup."),
+                        ("github", "GitHub auth isolado", "Move diretório github isolado da conta para backup."),
+                        ("all", "Codex + GitHub", "Move ambos para backup."),
+                    ],
+                    default="codex",
+                )
+                print("Nenhum token será impresso. O reset move arquivos para backup; não apaga direto.")
+                if confirm("Executar reset-auth com backup agora?", default=False):
+                    reset_args = SimpleNamespace(json=False, account=account, surface=surface, yes=True)
+                    command_reset_auth(reset_args)
+                else:
+                    reset_args = SimpleNamespace(json=False, account=account, surface=surface, yes=False)
+                    command_reset_auth(reset_args)
+                continue
+
+            if action == "smoke":
+                private_repo = input("Repo privado esperado para validar acesso (opcional, formato org/repo): ").strip() or None
+                codex_doctor = confirm("Incluir codex doctor --summary?", default=False)
+                smoke_args = SimpleNamespace(json=False, account=account, private_repo=private_repo, codex_doctor=codex_doctor)
+                command_smoke_test(smoke_args)
+                continue
+
+            if action == "switch":
+                switch_args = SimpleNamespace(json=False, account=account)
+                command_switch(switch_args)
+                print()
+                print("Para aplicar no shell atual, copie/cole os exports acima.")
+                continue
+
+    except KeyboardInterrupt:
+        print()
+        print("Wizard cancelado. Nenhuma ação pendente foi aplicada.")
+        return 130
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="agentic-env", description="Diagnostica e mantém ambientes isolados Codex pessoal/work.")
     parser.add_argument("--json", action="store_true", help="emite JSON estável")
@@ -389,6 +600,9 @@ def build_parser():
     p.add_argument("--private-repo")
     p.add_argument("--codex-doctor", action="store_true")
     p.set_defaults(func=command_smoke_test)
+
+    p = sub.add_parser("wizard", help="fluxo interativo guiado com escolhas e validações")
+    p.set_defaults(func=command_wizard)
     return parser
 
 
