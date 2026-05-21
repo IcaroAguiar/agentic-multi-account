@@ -123,6 +123,37 @@ doctor-corp
 
 Use the matching `*-me` aliases for your personal account.
 
+## Interactive CLI
+
+`agentic-env` is the durable command for diagnosing and maintaining the local setup from any repo:
+
+```zsh
+agentic-env --help
+agentic-env --json status corp
+agentic-env --json doctor corp
+agentic-env --json smoke-test corp
+```
+
+Install it on PATH:
+
+```zsh
+mkdir -p ~/.local/bin
+ln -sf "$PWD/bin/agentic-env" ~/.local/bin/agentic-env
+```
+
+Common operations:
+
+```zsh
+agentic-env --json setup --shell auto
+agentic-env --json link-github corp --mode isolated
+agentic-env --json link-github corp --mode inherit
+agentic-env install-icon --yes
+agentic-env reset-auth corp --surface codex
+agentic-env rollback icon
+```
+
+Commands that mutate auth or app state use dry-run by default where practical and require `--yes` for writes.
+
 ## Codex Work App Icon
 
 Do not modify a copied Electron `Codex.app` bundle. Changing `Contents/Info.plist`, helper bundle identifiers or signed resources can make Electron crash with `Unable to find helper app`.
@@ -264,6 +295,7 @@ bin/agentic-code           VSCode wrapper
 bin/agentic-gh             GitHub CLI wrapper
 bin/agentic-shell          account-scoped interactive shell
 bin/agentic-doctor         prints effective paths
+bin/agentic-env            interactive setup/doctor/smoke CLI
 
 lib/account-env.sh         shared env resolver
 

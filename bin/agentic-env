@@ -1,0 +1,410 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+KIT_ROOT = Path(__file__).resolve().parents[1]
+BIN_DIR = KIT_ROOT / "bin"
+SCRIPTS_DIR = KIT_ROOT / "scripts"
+
+
+def now_stamp() -> str:
+    return datetime.now().strftime("%Y%m%d%H%M%S")
+
+
+def account_root(account: str) -> Path:
+    return Path(os.environ.get("AGENTIC_ACCOUNTS_ROOT", str(Path.home() / "AgenticAccounts"))) / account
+
+
+def run(cmd, check=False):
+    proc = subprocess.run(cmd, text=True, capture_output=True)
+    if check and proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"command failed: {cmd}")
+    return {
+        "cmd": cmd,
+        "ok": proc.returncode == 0,
+        "exit_code": proc.returncode,
+        "stdout": proc.stdout.strip(),
+        "stderr": proc.stderr.strip(),
+    }
+
+
+def emit(args, payload, exit_code=0):
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print_human(payload)
+    return exit_code
+
+
+def print_human(payload):
+    if "summary" in payload:
+        print(payload["summary"])
+    for check in payload.get("checks", []):
+        mark = "ok" if check.get("ok") else "fail"
+        print(f"{mark}: {check.get('name')}")
+        detail = check.get("detail")
+        if detail:
+            print(f"  {detail}")
+    for step in payload.get("next_steps", []):
+        print(f"- {step}")
+
+
+def read_kv_file(path: Path):
+    data = {}
+    if not path.exists():
+        return data
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        data[key.strip()] = value.strip().strip('"').strip("'")
+    return data
+
+
+def write_kv_file(path: Path, values: dict, yes: bool):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    old = path.read_text() if path.exists() else ""
+    if path.exists():
+        backup = path.with_suffix(path.suffix + f".backup.{now_stamp()}")
+    else:
+        backup = None
+    lines = []
+    seen = set()
+    for raw in old.splitlines():
+        key = raw.split("=", 1)[0].strip() if "=" in raw and not raw.strip().startswith("#") else None
+        if key in values:
+            lines.append(f"{key}={values[key]}")
+            seen.add(key)
+        else:
+            lines.append(raw)
+    for key, value in values.items():
+        if key not in seen:
+            lines.append(f"{key}={value}")
+    if not yes:
+        return {"would_write": str(path), "would_backup": str(backup) if backup else None, "content": "\n".join(lines) + "\n"}
+    if backup:
+        shutil.copy2(path, backup)
+    path.write_text("\n".join(lines) + "\n")
+    os.chmod(path, 0o600)
+    return {"written": str(path), "backup": str(backup) if backup else None}
+
+
+def command_status(args):
+    root = account_root(args.account)
+    inheritance = read_kv_file(root / "env" / "inheritance.env")
+    paths = {
+        "account_root": root,
+        "codex_home": root / "codex",
+        "codex_auth": root / "codex" / "auth.json",
+        "github_config": Path(inheritance.get("AGENTIC_GH_CONFIG_DIR") or (str(Path.home() / ".config" / "gh") if inheritance.get("AGENTIC_INHERIT_GH") == "1" else str(root / "github"))),
+        "xdg_config": root / "xdg" / "config",
+        "plugins": root / "codex" / "plugins",
+        "mcp": root / "mcp",
+        "workspaces": root / "workspaces",
+    }
+    checks = [{"name": name, "ok": path.exists(), "detail": str(path)} for name, path in paths.items()]
+    payload = {
+        "ok": all(c["ok"] for c in checks if c["name"] not in {"codex_auth", "plugins", "mcp"}),
+        "command": "status",
+        "account": args.account,
+        "summary": f"status do ambiente {args.account}",
+        "github_mode": "inherited-global" if inheritance.get("AGENTIC_INHERIT_GH") == "1" else "isolated",
+        "checks": checks,
+    }
+    return emit(args, payload)
+
+
+def command_doctor(args):
+    checks = []
+    doctor = run([str(BIN_DIR / "agentic-doctor"), args.account])
+    checks.append({"name": "agentic-doctor", "ok": doctor["ok"], "detail": doctor["stdout"] or doctor["stderr"]})
+
+    gh = run([str(BIN_DIR / "agentic-gh"), args.account, "auth", "status"])
+    checks.append({"name": "github auth", "ok": gh["ok"], "detail": gh["stdout"] or gh["stderr"]})
+
+    if args.private_repo:
+        repo = run([str(BIN_DIR / "agentic-gh"), args.account, "repo", "view", args.private_repo, "--json", "nameWithOwner,viewerPermission"])
+        checks.append({"name": f"github repo {args.private_repo}", "ok": repo["ok"], "detail": repo["stdout"] or repo["stderr"]})
+
+    if args.codex:
+        codex = run([str(BIN_DIR / "agentic-codex"), args.account, "doctor", "--summary"])
+        checks.append({"name": "codex doctor", "ok": codex["ok"], "detail": codex["stdout"] or codex["stderr"]})
+
+    payload = {
+        "ok": all(c["ok"] for c in checks),
+        "command": "doctor",
+        "account": args.account,
+        "summary": f"doctor do ambiente {args.account}",
+        "checks": checks,
+        "next_steps": github_next_steps(checks),
+    }
+    return emit(args, payload, 0 if payload["ok"] else 1)
+
+
+def github_next_steps(checks):
+    gh = next((c for c in checks if c["name"] == "github auth"), None)
+    if not gh or gh["ok"]:
+        return []
+    detail = gh.get("detail", "")
+    if "token in default is invalid" in detail:
+        return ["O gh herdado está chegando ao ambiente, mas o token global está inválido: rode `gh auth login -h github.com` ou troque para modo isolado."]
+    if "not logged into any GitHub hosts" in detail:
+        return ["O gh isolado não está autenticado: rode `agentic-env link-github corp --mode isolated --yes` e depois `gh-corp auth login -h github.com`."]
+    return ["Reexecute `agentic-env --json doctor corp` após corrigir a autenticação do GitHub."]
+
+
+def command_link_github(args):
+    root = account_root(args.account)
+    path = root / "env" / "inheritance.env"
+    value = "1" if args.mode == "inherit" else "0"
+    result = write_kv_file(path, {"AGENTIC_INHERIT_GH": value}, args.yes)
+    payload = {
+        "ok": True,
+        "command": "link-github",
+        "account": args.account,
+        "mode": args.mode,
+        "summary": f"github {args.account}: modo {args.mode}",
+        "result": result,
+        "next_steps": [
+            "`agentic-env --json doctor %s`" % args.account,
+            "`gh auth login -h github.com` se estiver herdando token global inválido" if args.mode == "inherit" else "`gh-corp auth login -h github.com` para login isolado",
+        ],
+    }
+    return emit(args, payload)
+
+
+def detect_shell():
+    shell = Path(os.environ.get("SHELL", "")).name
+    return shell or "sh"
+
+
+def shell_snippet(shell: str):
+    path_line = f'{BIN_DIR}:$PATH'
+    if shell == "fish":
+        return f"set -gx AGENTIC_MULTI_ACCOUNT_HOME {KIT_ROOT}\nset -gx AGENTIC_ACCOUNTS_ROOT $HOME/AgenticAccounts\nfish_add_path {BIN_DIR}\n"
+    if shell in {"zsh", "bash", "sh"}:
+        return f'export AGENTIC_MULTI_ACCOUNT_HOME="{KIT_ROOT}"\nexport AGENTIC_ACCOUNTS_ROOT="$HOME/AgenticAccounts"\nexport PATH="{path_line}"\n'
+    return f"# shell não reconhecido: {shell}\n# adicione {BIN_DIR} ao PATH e defina AGENTIC_ACCOUNTS_ROOT.\n"
+
+
+def shell_rc(shell: str):
+    home = Path.home()
+    if shell == "zsh":
+        return home / ".zshrc"
+    if shell == "bash":
+        return home / ".bashrc"
+    if shell == "fish":
+        return home / ".config" / "fish" / "config.fish"
+    return None
+
+
+def command_setup(args):
+    shell = detect_shell() if args.shell == "auto" else args.shell
+    snippet = shell_snippet(shell)
+    checks = [{"name": "detected shell", "ok": True, "detail": shell}]
+    bootstrap = None
+    if args.yes:
+      bootstrap = run([str(SCRIPTS_DIR / "bootstrap-agentic-accounts.sh")])
+      checks.append({"name": "bootstrap", "ok": bootstrap["ok"], "detail": bootstrap["stdout"] or bootstrap["stderr"]})
+    rc = shell_rc(shell)
+    if rc and args.yes:
+        rc.parent.mkdir(parents=True, exist_ok=True)
+        old = rc.read_text() if rc.exists() else ""
+        if "AGENTIC_MULTI_ACCOUNT_HOME" not in old:
+            backup = rc.with_suffix(rc.suffix + f".backup.{now_stamp()}")
+            if rc.exists():
+                shutil.copy2(rc, backup)
+            with rc.open("a") as f:
+                f.write("\n# agentic-multi-account\n")
+                f.write(snippet)
+            checks.append({"name": "shell integration", "ok": True, "detail": f"updated {rc}"})
+        else:
+            checks.append({"name": "shell integration", "ok": True, "detail": f"already present in {rc}"})
+    payload = {
+        "ok": all(c["ok"] for c in checks),
+        "command": "setup",
+        "summary": "setup do agentic-multi-account",
+        "shell": shell,
+        "snippet": snippet,
+        "checks": checks,
+        "next_steps": ["eval o snippet acima ou abra um novo shell", "`agentic-env --json doctor corp`"],
+    }
+    return emit(args, payload, 0 if payload["ok"] else 1)
+
+
+def command_switch(args):
+    root = account_root(args.account)
+    lines = [
+        f'export AGENTIC_ACCOUNT="{args.account}"',
+        f'export AGENTIC_ACCOUNT_ROOT="{root}"',
+        f'export CODEX_HOME="{root / "codex"}"',
+        f'export XDG_CONFIG_HOME="{root / "xdg" / "config"}"',
+        f'export XDG_CACHE_HOME="{root / "xdg" / "cache"}"',
+        f'export XDG_DATA_HOME="{root / "xdg" / "data"}"',
+        f'export XDG_STATE_HOME="{root / "xdg" / "state"}"',
+    ]
+    payload = {"ok": True, "command": "switch", "account": args.account, "summary": "\n".join(lines), "exports": lines}
+    return emit(args, payload)
+
+
+def command_install_icon(args):
+    if not args.yes:
+        payload = {
+            "ok": True,
+            "command": "install-icon",
+            "summary": "dry-run: instalaria /Applications/Codex Work.app como launcher seguro",
+            "next_steps": ["rode `agentic-env install-icon --yes` para aplicar", "remova e recoloque o item no Dock se o cache antigo persistir"],
+        }
+        return emit(args, payload)
+    result = run([str(SCRIPTS_DIR / "install-codex-work-app.sh")])
+    verify = run(["codesign", "--verify", "--deep", "--strict", "/Applications/Codex Work.app"])
+    checks = [
+        {"name": "install launcher", "ok": result["ok"], "detail": result["stdout"] or result["stderr"]},
+        {"name": "codesign", "ok": verify["ok"], "detail": verify["stdout"] or verify["stderr"]},
+    ]
+    payload = {"ok": all(c["ok"] for c in checks), "command": "install-icon", "summary": "instalação do Codex Work launcher", "checks": checks}
+    return emit(args, payload, 0 if payload["ok"] else 1)
+
+
+def command_migrate(args):
+    checks = []
+    if not args.yes:
+        payload = {"ok": True, "command": "migrate", "summary": "dry-run migrate", "next_steps": ["adicione --yes para executar sync de harness/plugins aprovado"]}
+        return emit(args, payload)
+    if args.harness:
+        r = run([str(SCRIPTS_DIR / "sync-codex-harness.sh"), args.source, args.account])
+        checks.append({"name": "sync harness", "ok": r["ok"], "detail": r["stdout"] or r["stderr"]})
+    if args.plugins:
+        r = run([str(SCRIPTS_DIR / "sync-codex-plugins.sh"), args.source, args.account])
+        checks.append({"name": "sync plugins", "ok": r["ok"], "detail": r["stdout"] or r["stderr"]})
+    payload = {"ok": all(c["ok"] for c in checks), "command": "migrate", "account": args.account, "checks": checks}
+    return emit(args, payload, 0 if payload["ok"] else 1)
+
+
+def command_reset_auth(args):
+    root = account_root(args.account)
+    targets = []
+    if args.surface in {"codex", "all"}:
+        targets.append(root / "codex" / "auth.json")
+    if args.surface in {"github", "all"}:
+        targets.append(root / "github")
+    actions = []
+    for target in targets:
+        if not target.exists():
+            actions.append({"target": str(target), "ok": True, "detail": "missing"})
+            continue
+        backup = target.with_name(target.name + f".backup.{now_stamp()}")
+        if args.yes:
+            shutil.move(str(target), str(backup))
+            actions.append({"target": str(target), "ok": True, "backup": str(backup)})
+        else:
+            actions.append({"target": str(target), "ok": True, "would_move_to": str(backup)})
+    payload = {"ok": True, "command": "reset-auth", "account": args.account, "surface": args.surface, "actions": actions, "summary": "reset-auth com backup"}
+    return emit(args, payload)
+
+
+def command_rollback(args):
+    backup_root = Path(os.environ.get("CODEX_WORK_BACKUP_ROOT", str(Path.home() / "AgenticAccounts" / "shared" / "backups")))
+    backups = sorted(backup_root.glob("Codex Work.app.backup.*"))
+    if not backups:
+        return emit(args, {"ok": False, "command": "rollback", "summary": "nenhum backup de Codex Work.app encontrado"}, 1)
+    latest = backups[-1]
+    if not args.yes:
+        return emit(args, {"ok": True, "command": "rollback", "summary": f"dry-run: restauraria {latest}", "backup": str(latest)})
+    current = Path("/Applications/Codex Work.app")
+    if current.exists():
+        shutil.move(str(current), str(backup_root / f"Codex Work.app.before-rollback.{now_stamp()}"))
+    shutil.copytree(latest, current)
+    return emit(args, {"ok": True, "command": "rollback", "summary": f"restaurado {latest}"})
+
+
+def command_smoke_test(args):
+    args.codex = args.codex_doctor
+    return command_doctor(args)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="agentic-env", description="Diagnostica e mantém ambientes isolados Codex pessoal/work.")
+    parser.add_argument("--json", action="store_true", help="emite JSON estável")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("status", help="mostra paths e modo de isolamento")
+    p.add_argument("account", choices=["personal", "corp"])
+    p.set_defaults(func=command_status)
+
+    p = sub.add_parser("doctor", help="diagnóstico de conta, Codex e GitHub")
+    p.add_argument("account", choices=["personal", "corp"])
+    p.add_argument("--private-repo", help="repo privado esperado, ex: org/repo")
+    p.add_argument("--codex", action="store_true", help="também roda codex doctor")
+    p.set_defaults(func=command_doctor)
+
+    p = sub.add_parser("setup", help="bootstrap e snippet por shell")
+    p.add_argument("--shell", choices=["auto", "zsh", "bash", "fish", "sh"], default="auto")
+    p.add_argument("--yes", action="store_true", help="aplica bootstrap e integração no rc do shell")
+    p.set_defaults(func=command_setup)
+
+    p = sub.add_parser("switch", help="imprime exports para ativar uma conta no shell atual")
+    p.add_argument("account", choices=["personal", "corp"])
+    p.set_defaults(func=command_switch)
+
+    p = sub.add_parser("link-github", help="define GitHub isolado ou herdado por conta")
+    p.add_argument("account", choices=["personal", "corp"])
+    p.add_argument("--mode", choices=["isolated", "inherit"], required=True)
+    p.add_argument("--yes", action="store_true", help="grava env/inheritance.env com backup")
+    p.set_defaults(func=command_link_github)
+
+    p = sub.add_parser("install-icon", help="instala Codex Work.app como launcher seguro")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=command_install_icon)
+
+    p = sub.add_parser("migrate", help="migra harness/plugins aprovados para uma conta")
+    p.add_argument("account", choices=["personal", "corp"])
+    p.add_argument("--from", dest="source", default=str(Path.home() / ".codex"))
+    p.add_argument("--harness", action="store_true")
+    p.add_argument("--plugins", action="store_true")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=command_migrate)
+
+    p = sub.add_parser("reset-auth", help="move auth para backup; não apaga sem backup")
+    p.add_argument("account", choices=["personal", "corp"])
+    p.add_argument("--surface", choices=["codex", "github", "all"], required=True)
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=command_reset_auth)
+
+    p = sub.add_parser("rollback", help="restaura backup do Codex Work.app")
+    p.add_argument("target", choices=["icon"])
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=command_rollback)
+
+    p = sub.add_parser("smoke-test", help="executa smoke tests de isolamento e GitHub")
+    p.add_argument("account", choices=["personal", "corp"])
+    p.add_argument("--private-repo")
+    p.add_argument("--codex-doctor", action="store_true")
+    p.set_defaults(func=command_smoke_test)
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        return args.func(args)
+    except Exception as exc:
+        payload = {"ok": False, "command": getattr(args, "command", None), "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
