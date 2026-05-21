@@ -31,6 +31,26 @@ EOF
     chmod 600 "$base/env/account.env"
   fi
 
+  if [[ ! -f "$base/env/inheritance.env" ]]; then
+    cat > "$base/env/inheritance.env" <<EOF
+# Non-secret inheritance policy for $account. Keep this file chmod 600.
+# Default is strict local isolation. Enable only what this account may reuse.
+#
+# GitHub CLI:
+#   0 = isolated GH_CONFIG_DIR under this account
+#   1 = use the normal global gh auth at ~/.config/gh
+AGENTIC_INHERIT_GH=0
+#
+# Optional custom gh config directory. Leave empty unless you know why.
+# AGENTIC_GH_CONFIG_DIR=
+#
+# Browser/Chrome and Codex App connectors are not copied by this file.
+# See README.md for the difference between CLI credentials, browser profiles,
+# and cloud connector sessions.
+EOF
+    chmod 600 "$base/env/inheritance.env"
+  fi
+
   if [[ ! -f "$base/git/config" ]]; then
     cat > "$base/git/config" <<EOF
 [init]
@@ -67,4 +87,3 @@ print "created isolated account roots under $ROOT"
 print "add to zsh if desired:"
 print "  export AGENTIC_ACCOUNTS_ROOT=\"$ROOT\""
 print "  export PATH=\"$KIT_ROOT/bin:\\$PATH\""
-

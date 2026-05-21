@@ -23,6 +23,7 @@ Creates isolated account homes like:
     tmp/
     workspaces/
     env/account.env
+    env/inheritance.env
   corp/
     ...
   shared/
@@ -129,9 +130,11 @@ Per-account env lives here:
 ```text
 ~/AgenticAccounts/personal/env/account.env
 ~/AgenticAccounts/corp/env/account.env
+~/AgenticAccounts/personal/env/inheritance.env
+~/AgenticAccounts/corp/env/inheritance.env
 ```
 
-Example:
+Use `account.env` for account-specific secrets and provider settings:
 
 ```zsh
 OPENAI_PROJECT=
@@ -140,7 +143,53 @@ ANTHROPIC_API_KEY=
 OPENCODE_MODEL=
 ```
 
-Keep those files private. The bootstrap creates them with `0600`.
+Use `inheritance.env` for non-secret decisions about what a wrapped account may reuse from the normal macOS user:
+
+```zsh
+# 0 = isolated gh auth under ~/AgenticAccounts/<account>/github
+# 1 = inherit the normal global gh auth from ~/.config/gh
+AGENTIC_INHERIT_GH=0
+```
+
+Keep both files private. The bootstrap creates them with `0600`.
+
+## Credential Inheritance
+
+The default is strict isolation. Each account gets separate Codex state, XDG state, GitHub CLI config, Git config, tmp, logs and workspaces.
+
+Selective inheritance is intentionally opt-in and depends on the credential type:
+
+| Surface | Default | How to inherit | Notes |
+| --- | --- | --- | --- |
+| GitHub CLI | isolated | set `AGENTIC_INHERIT_GH=1` in `env/inheritance.env` | Then `gh-corp` uses the same `~/.config/gh` auth as plain `gh`. |
+| GitHub Codex plugin | follows `gh` CLI | same as GitHub CLI | The GitHub plugin shells out to `gh` for many workflows. |
+| Vercel CLI/env | provider tokens scrubbed | put corp-specific `VERCEL_TOKEN` etc. in `account.env` | Do not inherit by default if personal and corp projects differ. |
+| Hostinger env | provider tokens scrubbed | put corp-specific token/env in `account.env` | Hosted Codex connectors may also require login in the target Codex account. |
+| Chrome/browser profile | normal macOS profile unless separately isolated | use your normal Chrome profile or create a separate Chrome profile manually | `CODEX_HOME` does not isolate Chrome cookies. |
+| Teams/Gmail/Drive hosted connectors | connector/account controlled | connect the plugin inside the target Codex/ChatGPT account | Do not copy local files to inherit these sessions. |
+| Codex auth/session/history | isolated | do not inherit | Never copy `auth.json`, state DBs, sessions, logs or rollouts. |
+
+Example: make only the corp account inherit global GitHub CLI auth:
+
+```zsh
+printf '%s\n' 'AGENTIC_INHERIT_GH=1' > ~/AgenticAccounts/corp/env/inheritance.env
+chmod 600 ~/AgenticAccounts/corp/env/inheritance.env
+gh-corp auth status
+```
+
+When GitHub inheritance is enabled, the wrapper sets `GH_CONFIG_DIR=$HOME/.config/gh` explicitly. This matters because the wrapper still isolates `XDG_CONFIG_HOME`, and the GitHub CLI otherwise follows XDG paths.
+
+If global `gh auth status` reports an invalid token, inherited `gh-corp auth status` will report the same invalid token. Re-authenticate the global GitHub CLI with:
+
+```zsh
+gh auth login -h github.com
+```
+
+If you want corp GitHub to be separate instead, keep `AGENTIC_INHERIT_GH=0` and run:
+
+```zsh
+gh-corp auth login -h github.com
+```
 
 ## Sync Codex Harness And Plugins
 
