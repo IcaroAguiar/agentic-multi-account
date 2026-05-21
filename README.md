@@ -123,6 +123,18 @@ doctor-corp
 
 Use the matching `*-me` aliases for your personal account.
 
+## Codex Work App Icon
+
+Do not modify a copied Electron `Codex.app` bundle. Changing `Contents/Info.plist`, helper bundle identifiers or signed resources can make Electron crash with `Unable to find helper app`.
+
+Install the supported `Codex Work.app` launcher instead:
+
+```zsh
+./scripts/install-codex-work-app.sh
+```
+
+The launcher has its own icon and opens the official `/Applications/Codex.app` with the corp environment (`CODEX_HOME`, XDG paths and account roots). The runtime isolation still comes from the account environment, not from mutating the signed Electron app.
+
 ## Account Env Files
 
 Per-account env lives here:
@@ -256,6 +268,7 @@ bin/agentic-doctor         prints effective paths
 lib/account-env.sh         shared env resolver
 
 scripts/bootstrap-agentic-accounts.sh
+scripts/install-codex-work-app.sh
 scripts/sync-codex-harness.sh
 scripts/sync-codex-plugins.sh
 ```

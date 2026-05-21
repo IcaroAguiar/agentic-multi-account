@@ -12,6 +12,11 @@ fi
 
 if [[ -d "$app_path" ]]; then
   workspace="${1:-.}"
+  app_exec="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist" 2>/dev/null || true)"
+  if [[ "$app_exec" == "codex-work-launcher" ]]; then
+    exec open -n "$app_path"
+  fi
+
   exec open -n -a "$app_path" \
     --env "AGENTIC_ACCOUNT=$AGENTIC_ACCOUNT" \
     --env "AGENTIC_ACCOUNTS_ROOT=$AGENTIC_ACCOUNTS_ROOT" \
