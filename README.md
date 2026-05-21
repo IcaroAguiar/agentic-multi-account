@@ -52,7 +52,7 @@ The scripts also unset common provider tokens before loading the selected accoun
 Clone the repo and run the bootstrap:
 
 ```zsh
-git clone https://github.com/YOUR_USER/agentic-multi-account.git
+git clone https://github.com/IcaroAguiar/agentic-multi-account.git
 cd agentic-multi-account
 ./scripts/bootstrap-agentic-accounts.sh
 ```
@@ -220,4 +220,3 @@ The setup is additive. To stop using it:
 3. Optionally archive or delete `~/AgenticAccounts`.
 
 No default personal tool state is modified by the bootstrap.
-
