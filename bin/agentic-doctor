@@ -1,0 +1,20 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+source "${0:A:h}/../lib/account-env.sh"
+account="${1:-}"
+agentic_export_env "$account"
+
+print "AGENTIC_ACCOUNT=$AGENTIC_ACCOUNT"
+print "AGENTIC_ACCOUNT_ROOT=$AGENTIC_ACCOUNT_ROOT"
+print "CODEX_HOME=$CODEX_HOME"
+print "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"
+print "OPENCODE_CONFIG_DIR=$OPENCODE_CONFIG_DIR"
+print "XDG_CONFIG_HOME=$XDG_CONFIG_HOME"
+print "XDG_CACHE_HOME=$XDG_CACHE_HOME"
+print "XDG_DATA_HOME=$XDG_DATA_HOME"
+print "XDG_STATE_HOME=$XDG_STATE_HOME"
+print "GH_CONFIG_DIR=$GH_CONFIG_DIR"
+print "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL"
+print "TMPDIR=$TMPDIR"
+print "workspace=$AGENTIC_ACCOUNT_ROOT/workspaces"
+

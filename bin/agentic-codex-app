@@ -1,0 +1,22 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+source "${0:A:h}/../lib/account-env.sh"
+account="${1:-}"
+agentic_export_env "$account"
+shift
+
+if [[ -d /Applications/Codex.app ]]; then
+  workspace="${1:-.}"
+  exec open -n -a /Applications/Codex.app \
+    --env "AGENTIC_ACCOUNT=$AGENTIC_ACCOUNT" \
+    --env "AGENTIC_ACCOUNTS_ROOT=$AGENTIC_ACCOUNTS_ROOT" \
+    --env "AGENTIC_ACCOUNT_ROOT=$AGENTIC_ACCOUNT_ROOT" \
+    --env "CODEX_HOME=$CODEX_HOME" \
+    --env "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
+    --env "XDG_CACHE_HOME=$XDG_CACHE_HOME" \
+    --env "XDG_DATA_HOME=$XDG_DATA_HOME" \
+    --env "XDG_STATE_HOME=$XDG_STATE_HOME" \
+    "$workspace"
+fi
+
+exec codex app "$@"

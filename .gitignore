@@ -1,0 +1,18 @@
+.DS_Store
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+
+# Local verification output
+.verify-agentic-accounts/
+
+# Never commit account state or copied runtime homes
+AgenticAccounts/
+auth.json
+sessions/
+logs/
+state/
+cache/
+

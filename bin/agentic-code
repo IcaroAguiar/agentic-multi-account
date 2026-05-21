@@ -1,0 +1,13 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+source "${0:A:h}/../lib/account-env.sh"
+account="${1:-}"
+agentic_export_env "$account"
+shift
+
+mkdir -p "$AGENTIC_ACCOUNT_ROOT/vscode/user-data" "$AGENTIC_ACCOUNT_ROOT/vscode/extensions"
+exec code \
+  --user-data-dir "$AGENTIC_ACCOUNT_ROOT/vscode/user-data" \
+  --extensions-dir "$AGENTIC_ACCOUNT_ROOT/vscode/extensions" \
+  "$@"
+

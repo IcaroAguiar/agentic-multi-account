@@ -1,0 +1,8 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+source "${0:A:h}/../lib/account-env.sh"
+account="${1:-}"
+agentic_export_env "$account"
+shift
+exec opencode "$@"
+
