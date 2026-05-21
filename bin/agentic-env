@@ -390,21 +390,21 @@ def command_smoke_test(args):
     return command_doctor(args)
 
 
-def command_wizard(args):
+def command_configure(args):
     if args.json:
         payload = {
             "ok": False,
-            "command": "wizard",
+            "command": "configure",
             "error": {
                 "type": "InteractiveOnly",
-                "message": "wizard é interativo. Use status/doctor/smoke-test com --json para automação.",
+                "message": "configure é interativo. Use status/doctor/smoke-test com --json para automação.",
             },
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return 2
 
     try:
-        section("agentic-env wizard")
+        section("agentic-env configure")
         print("Fluxo guiado para configurar e validar ambientes Codex pessoais/work.")
         print("Por padrão, ações destrutivas não acontecem: auth é movido para backup e mudanças pedem confirmação.")
 
@@ -538,14 +538,14 @@ def command_wizard(args):
 
     except KeyboardInterrupt:
         print()
-        print("Wizard cancelado. Nenhuma ação pendente foi aplicada.")
+        print("Configuração cancelada. Nenhuma ação pendente foi aplicada.")
         return 130
 
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="agentic-env", description="Diagnostica e mantém ambientes isolados Codex pessoal/work.")
     parser.add_argument("--json", action="store_true", help="emite JSON estável")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("status", help="mostra paths e modo de isolamento")
     p.add_argument("account", choices=["personal", "corp"])
@@ -601,14 +601,19 @@ def build_parser():
     p.add_argument("--codex-doctor", action="store_true")
     p.set_defaults(func=command_smoke_test)
 
-    p = sub.add_parser("wizard", help="fluxo interativo guiado com escolhas e validações")
-    p.set_defaults(func=command_wizard)
+    p = sub.add_parser("configure", help="fluxo interativo guiado com escolhas e validações")
+    p.set_defaults(func=command_configure)
+
+    p = sub.add_parser("wizard", help="alias legado de configure")
+    p.set_defaults(func=command_configure)
     return parser
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    if args.command is None:
+        args.func = command_configure
     try:
         return args.func(args)
     except Exception as exc:

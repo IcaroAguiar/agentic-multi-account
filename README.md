@@ -129,13 +129,14 @@ Use the matching `*-me` aliases for your personal account.
 
 ```zsh
 agentic-env --help
-agentic-env wizard
+agentic-env
+agentic-env configure
 agentic-env --json status corp
 agentic-env --json doctor corp
 agentic-env --json smoke-test corp
 ```
 
-Use `agentic-env wizard` for the human guided flow. It shows numbered steps, explains the trade-off of each choice, asks before writes, and keeps destructive/auth actions behind backup-aware confirmations.
+Use `agentic-env` or `agentic-env configure` for the human guided flow. It shows numbered steps, explains the trade-off of each choice, asks before writes, and keeps destructive/auth actions behind backup-aware confirmations.
 
 Install it on PATH:
 
