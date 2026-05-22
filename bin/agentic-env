@@ -96,6 +96,17 @@ def run_with_spinner(cmd):
     }
 
 
+def run_with_input(cmd, input_text: str):
+    proc = subprocess.run(cmd, input=input_text, text=True, capture_output=True)
+    return {
+        "cmd": cmd,
+        "ok": proc.returncode == 0,
+        "exit_code": proc.returncode,
+        "stdout": proc.stdout.strip(),
+        "stderr": proc.stderr.strip(),
+    }
+
+
 def emit(args, payload, exit_code=0):
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
@@ -221,6 +232,23 @@ def confirm(prompt: str, default: bool = False) -> bool:
         if raw in {"n", "nao", "não", "no"}:
             return False
         print("Responda com s ou n.")
+
+
+def read_secret(prompt: str) -> str:
+    if not sys.stdin.isatty():
+        return sys.stdin.read().strip()
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        print(prompt, end="", flush=True)
+        new = termios.tcgetattr(fd)
+        new[3] &= ~termios.ECHO
+        termios.tcsetattr(fd, termios.TCSADRAIN, new)
+        value = sys.stdin.readline().strip()
+        print()
+        return value
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 def print_command(cmd: list[str]):
@@ -386,6 +414,67 @@ def command_link_github(args):
         ],
     }
     return emit(args, payload)
+
+
+def command_github_login(args):
+    root = account_root(args.account)
+    inheritance = read_kv_file(root / "env" / "inheritance.env")
+    if inheritance.get("AGENTIC_INHERIT_GH") == "1":
+        mode = "inherited-global"
+        target = Path.home() / ".config" / "gh"
+    else:
+        mode = "isolated"
+        target = root / "codex" / "github"
+
+    if not args.yes:
+        payload = {
+            "ok": True,
+            "command": "github-login",
+            "account": args.account,
+            "mode": mode,
+            "summary": "dry-run: login GitHub por token",
+            "target": str(target),
+            "next_steps": [f"rode `agentic-env github-login {args.account} --yes` para ler um PAT de forma oculta e autenticar"],
+        }
+        return emit(args, payload)
+
+    print(yellow("Aviso: --insecure-storage grava o token no GH_CONFIG_DIR selecionado."))
+    print(f"Conta: {bold(args.account)}")
+    print(f"Modo: {mode}")
+    print(f"Destino: {target}")
+    print("O token nao sera impresso.")
+    token = read_secret("Cole o PAT GitHub e pressione Enter: ")
+    if not token:
+        return emit(args, {"ok": False, "command": "github-login", "summary": "token vazio; nada foi alterado"}, 2)
+
+    cmd = [
+        str(BIN_DIR / "agentic-gh"),
+        args.account,
+        "auth",
+        "login",
+        "--hostname",
+        "github.com",
+        "--git-protocol",
+        "https",
+        "--insecure-storage",
+        "--with-token",
+    ]
+    result = run_with_input(cmd, token + "\n")
+    token = ""
+    verify = run([str(BIN_DIR / "agentic-gh"), args.account, "auth", "status"])
+    checks = [
+        {"name": "github login", "ok": result["ok"], "detail": result["stdout"] or result["stderr"]},
+        {"name": "github auth status", "ok": verify["ok"], "detail": verify["stdout"] or verify["stderr"]},
+    ]
+    payload = {
+        "ok": all(c["ok"] for c in checks),
+        "command": "github-login",
+        "account": args.account,
+        "mode": mode,
+        "summary": f"login GitHub {args.account}",
+        "checks": checks,
+    }
+    return emit(args, payload, 0 if payload["ok"] else 1)
 
 
 def detect_shell():
@@ -694,14 +783,18 @@ def command_configure(args):
                 print()
                 if mode == "isolated":
                     print(f"Vai gravar AGENTIC_INHERIT_GH=0 para {account}.")
-                    print("Proximo passo manual: gh-corp auth login -h github.com")
+                    print(f"Proximo passo: {prog_name()} github-login {account} --yes")
                 else:
                     print(f"Vai gravar AGENTIC_INHERIT_GH=1 para {account}.")
-                    print("Se o token global estiver invalido: gh auth login -h github.com")
+                    print(f"Se o token global estiver invalido: {prog_name()} github-login {account} --yes")
                 if confirm("Aplicar esta política de GitHub agora?", default=False):
                     link_args = SimpleNamespace(json=False, account=account, mode=mode, yes=True)
                     command_link_github(link_args)
-                    run_and_show("github smoke", [str(BIN_DIR / "agentic-gh"), account, "auth", "status"], allow_fail=True)
+                    if confirm("Autenticar GitHub por token agora?", default=False):
+                        login_args = SimpleNamespace(json=False, account=account, yes=True)
+                        command_github_login(login_args)
+                    else:
+                        run_and_show("github smoke", [str(BIN_DIR / "agentic-gh"), account, "auth", "status"], allow_fail=True)
                 else:
                     print("Dry-run concluído. Nenhum arquivo alterado.")
                 continue
@@ -814,6 +907,11 @@ def build_parser():
     p.add_argument("-m", "--mode", choices=["isolated", "inherit"], required=True)
     p.add_argument("-y", "--yes", action="store_true", help="grava env/inheritance.env com backup")
     p.set_defaults(func=command_link_github)
+
+    p = sub.add_parser("github-login", help="autentica GitHub por PAT com input oculto")
+    p.add_argument("account", choices=["personal", "corp"])
+    p.add_argument("-y", "--yes", action="store_true", help="executa login; sem --yes mostra dry-run")
+    p.set_defaults(func=command_github_login)
 
     p = sub.add_parser("install-icon", help="instala Codex Work.app como launcher seguro")
     p.add_argument("-y", "--yes", action="store_true")

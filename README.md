@@ -154,6 +154,7 @@ Common operations:
 agentic-env --json setup --shell auto
 agentic-env --json link-github corp --mode isolated
 agentic-env --json link-github corp --mode inherit
+agentic-env github-login corp --yes
 agentic-env install-icon --yes
 agentic-env reset-auth corp --surface codex
 agentic-env rollback icon
@@ -218,6 +219,28 @@ Selective inheritance is intentionally opt-in and depends on the credential type
 | Hostinger env | provider tokens scrubbed | put corp-specific token/env in `account.env` | Hosted Codex connectors may also require login in the target Codex account. |
 | Chrome/browser profile | normal macOS profile unless separately isolated | use your normal Chrome profile or create a separate Chrome profile manually | `CODEX_HOME` does not isolate Chrome cookies. |
 | Codex auth/session/history | isolated | do not inherit | Never copy `auth.json`, state DBs, sessions, logs or rollouts. |
+
+### GitHub Login When Browser Flow Fails
+
+`gh auth login --with-token` waits for stdin and does not show a prompt. Use the helper instead:
+
+```zsh
+agentic-env github-login corp --yes
+```
+
+It reads a GitHub PAT with hidden input, sends it to `gh auth login --with-token`, and validates with `agentic-gh corp auth status`. In isolated mode the token is stored under:
+
+```text
+~/AgenticAccounts/corp/codex/github
+```
+
+For non-interactive shells:
+
+```zsh
+printf "%s\n" "$GITHUB_PAT" | agentic-env github-login corp --yes
+```
+
+Do not paste PATs into chat, logs, shell history, or README files.
 
 Example: make only the corp account inherit global GitHub CLI auth:
 
